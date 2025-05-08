@@ -110,7 +110,32 @@ class OLXScraper:
                     if delivery_element:
                         delivery_info = "Wysyłka OLX"
                     
-                    offer_id = re.search(r'ID(.+?)
+                    # Poprawiona linia z błędem:
+                    offer_id = re.search(r'ID(.+?)', offer_url)
+                    if not offer_id:
+                        offer_id = offer_url  # Jeśli nie możemy wyciągnąć ID, używamy całego URL jako ID
+                    else:
+                        offer_id = offer_id.group(1)
+                    
+                    location_element = offer.find('p', {'data-testid': 'location-date'})
+                    location_text = location_element.text.strip() if location_element else "Brak lokalizacji"
+                    
+                    offers.append({
+                        'id': offer_id,
+                        'title': title,
+                        'price': price,
+                        'url': offer_url,
+                        'img_url': img_url,
+                        'delivery': delivery_info,
+                        'location': location_text
+                    })
+                except Exception as e:
+                    print(f"Błąd podczas parsowania oferty: {e}")
+            
+            return offers
+        except Exception as e:
+            print(f"Błąd podczas wyszukiwania: {e}")
+            return []
 
 @bot.event
 async def on_ready():
@@ -152,7 +177,105 @@ async def on_interaction(interaction):
                     super().__init__(title="Dodaj nowe monitorowanie OLX")
                     
                     self.query = discord.ui.TextInput(
-                        label="Szukana fraza (
+                        label="Szukana fraza",
+                        style=discord.TextStyle.short,
+                        placeholder="np. iPhone 13",
+                        required=True
+                    )
+                    
+                    self.category = discord.ui.TextInput(
+                        label="Kategoria (opcjonalnie)",
+                        style=discord.TextStyle.short,
+                        placeholder="np. elektronika",
+                        required=False
+                    )
+                    
+                    self.min_price = discord.ui.TextInput(
+                        label="Minimalna cena (opcjonalnie)",
+                        style=discord.TextStyle.short,
+                        placeholder="np. 1000",
+                        required=False
+                    )
+                    
+                    self.max_price = discord.ui.TextInput(
+                        label="Maksymalna cena (opcjonalnie)",
+                        style=discord.TextStyle.short,
+                        placeholder="np. 3000",
+                        required=False
+                    )
+                    
+                    # Dodajemy pola do modalu
+                    self.add_item(self.query)
+                    self.add_item(self.category)
+                    self.add_item(self.min_price)
+                    self.add_item(self.max_price)
+                
+                async def on_submit(self, interaction: discord.Interaction):
+                    # Przetwarzanie danych z formularza
+                    query = self.query.value
+                    category = self.category.value if self.category.value else None
+                    min_price = self.min_price.value if self.min_price.value else None
+                    max_price = self.max_price.value if self.max_price.value else None
+                    
+                    user_id = str(interaction.user.id)
+                    channel_id = interaction.channel.id
+                    
+                    config = {
+                        'query': query,
+                        'category': category,
+                        'min_price': min_price,
+                        'max_price': max_price,
+                        'channel_id': channel_id
+                    }
+                    
+                    if user_id not in user_configs:
+                        user_configs[user_id] = []
+                    
+                    user_configs[user_id].append(config)
+                    
+                    # Tworzenie przycisku do usunięcia monitorowania
+                    view = discord.ui.View()
+                    button = discord.ui.Button(
+                        label="Usuń monitorowanie", 
+                        style=discord.ButtonStyle.danger, 
+                        custom_id=f"remove_monitor_{len(user_configs[user_id])-1}_{user_id}"
+                    )
+                    view.add_item(button)
+                    
+                    await interaction.response.send_message(
+                        f"✅ Dodano monitorowanie dla: **{query}**\n"
+                        f"Kategoria: {category or 'wszystkie'}\n"
+                        f"Zakres cen: {min_price or 'od min'} - {max_price or 'do max'} zł\n"
+                        f"Powiadomienia będą wysyłane do tego kanału co {INTERVAL} minut.",
+                        view=view
+                    )
+            
+            # Wysyłamy modal do użytkownika
+            await interaction.response.send_modal(MonitorModal())
+            
+        # Obsługa przycisku wyświetlania listy monitorowań
+        elif custom_id == "list_monitors_button":
+            user_id = str(interaction.user.id)
+            
+            if user_id not in user_configs or not user_configs[user_id]:
+                await interaction.response.send_message("❌ Nie masz żadnych monitorowanych wyszukiwań.", ephemeral=True)
+                return
+            
+            embed = discord.Embed(
+                title="📋 Twoje monitorowane wyszukiwania",
+                color=discord.Color.blue()
+            )
+            
+            for i, config in enumerate(user_configs[user_id], 1):
+                value = f"Kategoria: {config['category'] or 'wszystkie'}\n" \
+                        f"Cena: {config['min_price'] or 'min'} - {config['max_price'] or 'max'} zł"
+                embed.add_field(
+                    name=f"{i}. {config['query']}",
+                    value=value,
+                    inline=False
+                )
+            
+            await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.command(name='monitor')
 async def monitor(ctx, *, params):
@@ -380,222 +503,6 @@ async def check_offers():
                     ))
                     
                     await channel.send(embed=embed, view=view)
-            except Exception as e:
-                print(f"Błąd podczas sprawdzania ofert: {e}")
-
-# Limit ilości zapamiętanych ofert aby uniknąć wycieków pamięci
-@tasks.loop(hours=24)
-async def clear_old_offers():
-    """Czyści starsze oferty z pamięci"""
-    global seen_offers
-    if len(seen_offers) > 10000:
-        seen_offers = set(list(seen_offers)[-5000:])
-    print(f"[{datetime.now()}] Wyczyszczono pamięć ofert. Pozostało {len(seen_offers)} ofert.")
-
-@bot.event
-async def on_command_error(ctx, error):
-    if isinstance(error, commands.CommandNotFound):
-        await ctx.send(f"❌ Nieznana komenda. Użyj `{PREFIX}pomoc` aby zobaczyć dostępne komendy.")
-    elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send(f"❌ Brakujący argument. Użyj `{PREFIX}pomoc` aby zobaczyć poprawne użycie.")
-    else:
-        await ctx.send(f"❌ Wystąpił błąd: {error}")
-        print(f"Błąd: {error}")
-
-# Uruchomienie bota
-if __name__ == "__main__":
-    # Zadanie clear_old_offers zostanie uruchomione automatycznie po uruchomieniu bota
-    # dzięki dekoratorowi @tasks.loop
-    bot.run(TOKEN)
-, offer_url)
-                    if not offer_id:
-                        offer_id = offer_url  # Jeśli nie możemy wyciągnąć ID, używamy całego URL jako ID
-                    else:
-                        offer_id = offer_id.group(1)
-                    
-                    location_element = offer.find('p', {'data-testid': 'location-date'})
-                    location_text = location_element.text.strip() if location_element else "Brak lokalizacji"
-                    
-                    offers.append({
-                        'id': offer_id,
-                        'title': title,
-                        'price': price,
-                        'url': offer_url,
-                        'img_url': img_url,
-                        'delivery': delivery_info,
-                        'location': location_text
-                    })
-                except Exception as e:
-                    print(f"Błąd podczas parsowania oferty: {e}")
-            
-            return offers
-        except Exception as e:
-            print(f"Błąd podczas wyszukiwania: {e}")
-            return []
-
-@bot.event
-async def on_ready():
-    print(f'Bot zalogowany jako {bot.user.name}')
-    check_offers.start()
-    clear_old_offers.start()  # Uruchamiamy zadanie czyszczenia po zalogowaniu bota
-
-@bot.command(name='monitor')
-async def monitor(ctx, *, params):
-    """
-    Dodaje nowe monitorowanie OLX. 
-    Użycie: !monitor szukane_frazy | [kategoria] | [min_cena] | [max_cena]
-    Przykład: !monitor iPhone 13 | elektronika | 2000 | 3500
-    """
-    parts = [part.strip() for part in params.split('|')]
-    
-    query = parts[0].strip()
-    category = parts[1].strip() if len(parts) > 1 and parts[1].strip() else None
-    min_price = parts[2].strip() if len(parts) > 2 and parts[2].strip() else None
-    max_price = parts[3].strip() if len(parts) > 3 and parts[3].strip() else None
-    
-    if not query:
-        await ctx.send("❌ Musisz podać co najmniej frazę wyszukiwania!")
-        return
-    
-    user_id = str(ctx.author.id)
-    channel_id = ctx.channel.id
-    
-    config = {
-        'query': query,
-        'category': category,
-        'min_price': min_price,
-        'max_price': max_price,
-        'channel_id': channel_id
-    }
-    
-    if user_id not in user_configs:
-        user_configs[user_id] = []
-    
-    user_configs[user_id].append(config)
-    
-    await ctx.send(f"✅ Dodano monitorowanie dla: **{query}**\n"
-                  f"Kategoria: {category or 'wszystkie'}\n"
-                  f"Zakres cen: {min_price or 'od min'} - {max_price or 'do max'} zł\n"
-                  f"Powiadomienia będą wysyłane do tego kanału co {INTERVAL} minut.")
-
-@bot.command(name='lista')
-async def list_monitors(ctx):
-    """Wyświetla listę monitorowanych wyszukiwań"""
-    user_id = str(ctx.author.id)
-    
-    if user_id not in user_configs or not user_configs[user_id]:
-        await ctx.send("❌ Nie masz żadnych monitorowanych wyszukiwań.")
-        return
-    
-    embed = discord.Embed(
-        title="📋 Twoje monitorowane wyszukiwania",
-        color=discord.Color.blue()
-    )
-    
-    for i, config in enumerate(user_configs[user_id], 1):
-        value = f"Kategoria: {config['category'] or 'wszystkie'}\n" \
-                f"Cena: {config['min_price'] or 'min'} - {config['max_price'] or 'max'} zł"
-        embed.add_field(
-            name=f"{i}. {config['query']}",
-            value=value,
-            inline=False
-        )
-    
-    await ctx.send(embed=embed)
-
-@bot.command(name='usun')
-async def remove_monitor(ctx, index: int):
-    """Usuwa monitorowane wyszukiwanie o podanym indeksie"""
-    user_id = str(ctx.author.id)
-    
-    if user_id not in user_configs or not user_configs[user_id]:
-        await ctx.send("❌ Nie masz żadnych monitorowanych wyszukiwań.")
-        return
-    
-    if index < 1 or index > len(user_configs[user_id]):
-        await ctx.send(f"❌ Nieprawidłowy indeks. Wybierz od 1 do {len(user_configs[user_id])}.")
-        return
-    
-    removed = user_configs[user_id].pop(index - 1)
-    await ctx.send(f"✅ Usunięto monitorowanie dla: **{removed['query']}**")
-
-@bot.command(name='pomoc')
-async def help_command(ctx):
-    """Wyświetla dostępne komendy"""
-    embed = discord.Embed(
-        title="📚 Pomoc - OLX Monitor Bot",
-        description="Lista dostępnych komend:",
-        color=discord.Color.green()
-    )
-    
-    embed.add_field(
-        name=f"{PREFIX}monitor <fraza> | [kategoria] | [min_cena] | [max_cena]",
-        value="Dodaje nowe monitorowanie OLX\n"
-              "Przykład: `!monitor iPhone 13 | elektronika | 2000 | 3500`",
-        inline=False
-    )
-    
-    embed.add_field(
-        name=f"{PREFIX}lista",
-        value="Wyświetla listę twoich monitorowanych wyszukiwań",
-        inline=False
-    )
-    
-    embed.add_field(
-        name=f"{PREFIX}usun <numer>",
-        value="Usuwa monitorowane wyszukiwanie o podanym numerze z listy\n"
-              "Przykład: `!usun 1`",
-        inline=False
-    )
-    
-    embed.add_field(
-        name=f"{PREFIX}pomoc",
-        value="Wyświetla tę wiadomość",
-        inline=False
-    )
-    
-    await ctx.send(embed=embed)
-
-@tasks.loop(minutes=INTERVAL)
-async def check_offers():
-    """Sprawdza nowe oferty dla wszystkich monitorowanych wyszukiwań"""
-    print(f"[{datetime.now()}] Sprawdzanie nowych ofert...")
-    for user_id, configs in user_configs.items():
-        for config in configs:
-            try:
-                offers = OLXScraper.search_olx(
-                    config['query'],
-                    category=config['category'],
-                    min_price=config['min_price'],
-                    max_price=config['max_price']
-                )
-                
-                channel = bot.get_channel(config['channel_id'])
-                if not channel:
-                    print(f"Nie można znaleźć kanału o ID {config['channel_id']}")
-                    continue
-                
-                new_offers = []
-                for offer in offers:
-                    offer_key = f"{user_id}_{offer['id']}"
-                    if offer_key not in seen_offers:
-                        seen_offers.add(offer_key)
-                        new_offers.append(offer)
-                
-                for offer in new_offers:
-                    embed = discord.Embed(
-                        title=offer['title'],
-                        url=offer['url'],
-                        color=discord.Color.blue(),
-                        description=f"💰 **Cena:** {offer['price']}"
-                    )
-                    
-                    if offer['img_url']:
-                        embed.set_thumbnail(url=offer['img_url'])
-                    
-                    embed.set_footer(text=f"Wyszukiwanie: {config['query']}")
-                    
-                    await channel.send(embed=embed)
             except Exception as e:
                 print(f"Błąd podczas sprawdzania ofert: {e}")
 
