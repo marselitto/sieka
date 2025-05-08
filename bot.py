@@ -11,7 +11,7 @@ import re
 # Konfiguracja bota
 TOKEN = os.getenv('DISCORD_TOKEN')  # Token bota - ustaw w zmiennych środowiskowych
 PREFIX = '!'
-INTERVAL = 15  # Czas między sprawdzeniami w minutach
+INTERVAL = 5  # Czas między sprawdzeniami w minutach
 
 intents = discord.Intents.default()
 intents.message_content = True
