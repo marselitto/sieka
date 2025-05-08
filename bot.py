@@ -98,6 +98,7 @@ class OLXScraper:
 async def on_ready():
     print(f'Bot zalogowany jako {bot.user.name}')
     check_offers.start()
+    clear_old_offers.start()  # Uruchamiamy zadanie czyszczenia po zalogowaniu bota
 
 @bot.command(name='monitor')
 async def monitor(ctx, *, params):
@@ -280,5 +281,6 @@ async def on_command_error(ctx, error):
 
 # Uruchomienie bota
 if __name__ == "__main__":
-    clear_old_offers.start()
+    # Zadanie clear_old_offers zostanie uruchomione automatycznie po uruchomieniu bota
+    # dzięki dekoratorowi @tasks.loop
     bot.run(TOKEN)
