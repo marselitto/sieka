@@ -728,6 +728,7 @@ async def check_offers():
                         style=discord.ButtonStyle.link, 
                         url=offer['url'],
                         emoji="🔍"
+                    ))
                     
                     
                     await channel.send(embed=embed, view=view)
