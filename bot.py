@@ -35,13 +35,18 @@ class OLXScraper:
             return price_text.strip()
     
     @staticmethod
-    def search_olx(query, category=None, min_price=None, max_price=None, delivery_option=None, condition=None, location=None):
+    def search_olx(query, category=None, min_price=None, max_price=None, delivery_option=None, condition=None, location=None, sort_by='newest'):
         url = f"https://www.olx.pl/oferty/q-{query.replace(' ', '-')}/"
         
         if category:
             url = f"https://www.olx.pl/{category}/q-{query.replace(' ', '-')}/"
         
         params = {}
+        
+        # Dodanie parametru sortowania - domyślnie według najnowszych
+        if sort_by == 'newest':
+            params['search[order]'] = 'created_at:desc'
+        
         if min_price:
             params['search[filter_float_price:from]'] = min_price
         if max_price:
@@ -204,11 +209,19 @@ async def on_interaction(interaction):
                         required=False
                     )
                     
+                    self.delivery = discord.ui.TextInput(
+                        label="Opcje wysyłki (olx/free/brak)",
+                        style=discord.TextStyle.short,
+                        placeholder="np. olx",
+                        required=False
+                    )
+                    
                     # Dodajemy pola do modalu
                     self.add_item(self.query)
                     self.add_item(self.category)
                     self.add_item(self.min_price)
                     self.add_item(self.max_price)
+                    self.add_item(self.delivery)
                 
                 async def on_submit(self, interaction: discord.Interaction):
                     # Przetwarzanie danych z formularza
@@ -216,6 +229,7 @@ async def on_interaction(interaction):
                     category = self.category.value if self.category.value else None
                     min_price = self.min_price.value if self.min_price.value else None
                     max_price = self.max_price.value if self.max_price.value else None
+                    delivery = self.delivery.value.lower() if self.delivery.value else None
                     
                     user_id = str(interaction.user.id)
                     channel_id = interaction.channel.id
@@ -225,13 +239,23 @@ async def on_interaction(interaction):
                         'category': category,
                         'min_price': min_price,
                         'max_price': max_price,
-                        'channel_id': channel_id
+                        'delivery': delivery,
+                        'channel_id': channel_id,
+                        'sort_by': 'newest'  # Domyślnie sortujemy po najnowszych
                     }
                     
                     if user_id not in user_configs:
                         user_configs[user_id] = []
                     
                     user_configs[user_id].append(config)
+                    
+                    # Przygotowanie informacji o opcjach wysyłki
+                    delivery_info = ""
+                    if delivery:
+                        if delivery == "olx":
+                            delivery_info = "Tylko z wysyłką OLX"
+                        elif delivery == "free":
+                            delivery_info = "Tylko z darmową wysyłką"
                     
                     # Tworzenie przycisku do usunięcia monitorowania
                     view = discord.ui.View()
@@ -246,6 +270,8 @@ async def on_interaction(interaction):
                         f"✅ Dodano monitorowanie dla: **{query}**\n"
                         f"Kategoria: {category or 'wszystkie'}\n"
                         f"Zakres cen: {min_price or 'od min'} - {max_price or 'do max'} zł\n"
+                        f"{delivery_info}\n"
+                        f"Sortowanie: Według najnowszych\n"
                         f"Powiadomienia będą wysyłane do tego kanału co {INTERVAL} minut.",
                         view=view
                     )
@@ -267,8 +293,18 @@ async def on_interaction(interaction):
             )
             
             for i, config in enumerate(user_configs[user_id], 1):
+                # Przygotowanie informacji o opcjach wysyłki
+                delivery_info = ""
+                if config.get('delivery'):
+                    if config['delivery'] == "olx":
+                        delivery_info = "Tylko z wysyłką OLX"
+                    elif config['delivery'] == "free":
+                        delivery_info = "Tylko z darmową wysyłką"
+                
                 value = f"Kategoria: {config['category'] or 'wszystkie'}\n" \
-                        f"Cena: {config['min_price'] or 'min'} - {config['max_price'] or 'max'} zł"
+                        f"Cena: {config['min_price'] or 'min'} - {config['max_price'] or 'max'} zł\n" \
+                        f"{delivery_info}\n" \
+                        f"Sortowanie: Według najnowszych"
                 embed.add_field(
                     name=f"{i}. {config['query']}",
                     value=value,
@@ -309,7 +345,8 @@ async def monitor(ctx, *, params):
         'delivery': delivery,
         'condition': condition,
         'location': location,
-        'channel_id': channel_id
+        'channel_id': channel_id,
+        'sort_by': 'newest'  # Domyślnie sortujemy po najnowszych
     }
     
     if user_id not in user_configs:
@@ -342,6 +379,7 @@ async def monitor(ctx, *, params):
         f"Kategoria: {category or 'wszystkie'}\n"
         f"Zakres cen: {min_price or 'od min'} - {max_price or 'do max'} zł\n"
         f"{delivery_info}\n{condition_info}\n{location_info}\n"
+        f"Sortowanie: Według najnowszych\n"
         f"Powiadomienia będą wysyłane do tego kanału co {INTERVAL} minut.",
         view=view
     )
@@ -361,8 +399,18 @@ async def list_monitors(ctx):
     )
     
     for i, config in enumerate(user_configs[user_id], 1):
+        # Przygotowanie informacji o opcjach wysyłki
+        delivery_info = ""
+        if config.get('delivery'):
+            if config['delivery'] == "olx":
+                delivery_info = "Tylko z wysyłką OLX"
+            elif config['delivery'] == "free":
+                delivery_info = "Tylko z darmową wysyłką"
+        
         value = f"Kategoria: {config['category'] or 'wszystkie'}\n" \
-                f"Cena: {config['min_price'] or 'min'} - {config['max_price'] or 'max'} zł"
+                f"Cena: {config['min_price'] or 'min'} - {config['max_price'] or 'max'} zł\n" \
+                f"{delivery_info}\n" \
+                f"Sortowanie: Według najnowszych"
         embed.add_field(
             name=f"{i}. {config['query']}",
             value=value,
@@ -401,7 +449,8 @@ async def help_command(ctx):
         value="Dodaje nowe monitorowanie OLX\n"
               "Przykład: `!monitor iPhone 13 | elektronika | 2000 | 3500 | olx | nowy | Warszawa`\n"
               "Opcje wysyłki: `olx` (tylko z wysyłką OLX), `free` (darmowa wysyłka)\n"
-              "Stan: `nowy`, `używany`, `uszkodzony`",
+              "Stan: `nowy`, `używany`, `uszkodzony`\n"
+              "Sortowane wg. najnowszych ofert",
         inline=False
     )
     
@@ -459,7 +508,8 @@ async def check_offers():
                     max_price=config['max_price'],
                     delivery_option=config.get('delivery'),
                     condition=config.get('condition'),
-                    location=config.get('location')
+                    location=config.get('location'),
+                    sort_by=config.get('sort_by', 'newest')  # Domyślnie sortowanie wg najnowszych
                 )
                 
                 channel = bot.get_channel(config['channel_id'])
