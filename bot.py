@@ -12,7 +12,7 @@ import re
 # Konfiguracja bota
 TOKEN = os.getenv('DISCORD_TOKEN')  # Token bota - ustaw w zmiennych środowiskowych
 PREFIX = '!'
-INTERVAL = 5  # Czas między sprawdzeniami w minutach
+INTERVAL = 15  # Czas między sprawdzeniami w minutach
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -182,55 +182,86 @@ async def on_interaction(interaction):
                     super().__init__(title="Dodaj nowe monitorowanie OLX")
                     
                     self.query = discord.ui.TextInput(
-                        label="Szukana fraza",
+                        label="Czego szukasz?",
                         style=discord.TextStyle.short,
-                        placeholder="np. iPhone 13",
+                        placeholder="np. iPhone 13, PlayStation 5, rower górski",
                         required=True
                     )
                     
                     self.category = discord.ui.TextInput(
-                        label="Kategoria (opcjonalnie)",
+                        label="Kategoria",
                         style=discord.TextStyle.short,
-                        placeholder="np. elektronika",
+                        placeholder="np. elektronika, motoryzacja, dom i ogród",
                         required=False
                     )
                     
-                    self.min_price = discord.ui.TextInput(
-                        label="Minimalna cena (opcjonalnie)",
+                    self.price_range = discord.ui.TextInput(
+                        label="Zakres cen (od-do)",
                         style=discord.TextStyle.short,
-                        placeholder="np. 1000",
-                        required=False
-                    )
-                    
-                    self.max_price = discord.ui.TextInput(
-                        label="Maksymalna cena (opcjonalnie)",
-                        style=discord.TextStyle.short,
-                        placeholder="np. 3000",
+                        placeholder="np. 1000-3000 (puste = bez limitu)",
                         required=False
                     )
                     
                     self.delivery = discord.ui.TextInput(
-                        label="Opcje wysyłki (olx/free/brak)",
+                        label="Opcje wysyłki",
                         style=discord.TextStyle.short,
-                        placeholder="np. olx",
+                        placeholder="Wpisz: olx (wysyłka OLX), free (darmowa) lub zostaw puste",
+                        required=False
+                    )
+                    
+                    self.additional_info = discord.ui.TextInput(
+                        label="Dodatkowe informacje",
+                        style=discord.TextStyle.paragraph,
+                        placeholder="Inne istotne informacje (np. stan: nowy/używany, lokalizacja)",
                         required=False
                     )
                     
                     # Dodajemy pola do modalu
                     self.add_item(self.query)
                     self.add_item(self.category)
-                    self.add_item(self.min_price)
-                    self.add_item(self.max_price)
+                    self.add_item(self.price_range)
                     self.add_item(self.delivery)
+                    self.add_item(self.additional_info)
                 
                 async def on_submit(self, interaction: discord.Interaction):
                     # Przetwarzanie danych z formularza
                     query = self.query.value
                     category = self.category.value if self.category.value else None
-                    min_price = self.min_price.value if self.min_price.value else None
-                    max_price = self.max_price.value if self.max_price.value else None
+                    
+                    # Przetwarzanie zakresu cen
+                    min_price = None
+                    max_price = None
+                    if self.price_range.value:
+                        price_parts = self.price_range.value.split('-')
+                        if len(price_parts) == 2:
+                            min_price = price_parts[0].strip() if price_parts[0].strip() else None
+                            max_price = price_parts[1].strip() if price_parts[1].strip() else None
+                        elif len(price_parts) == 1 and price_parts[0].strip():
+                            # Jeśli podana tylko jedna wartość, traktujemy ją jako maksymalną cenę
+                            max_price = price_parts[0].strip()
+                    
+                    # Opcje wysyłki
                     delivery = self.delivery.value.lower() if self.delivery.value else None
                     
+                    # Przetwarzanie dodatkowych informacji
+                    condition = None
+                    location = None
+                    if self.additional_info.value:
+                        # Sprawdzanie stanu przedmiotu w dodatkowych informacjach
+                        if "nowy" in self.additional_info.value.lower():
+                            condition = "nowy"
+                        elif "używany" in self.additional_info.value.lower() or "uzywany" in self.additional_info.value.lower():
+                            condition = "używany"
+                        elif "uszkodzony" in self.additional_info.value.lower():
+                            condition = "uszkodzony"
+                        
+                        # Szukanie potencjalnej lokalizacji
+                        for line in self.additional_info.value.split('\n'):
+                            if "lokalizacja" in line.lower() or "miasto" in line.lower():
+                                location_match = re.search(r'(?:lokalizacja|miasto)[:]*\s*([A-Za-zżźćńółęąśŻŹĆĄŚĘŁÓŃ\s]+)', line, re.IGNORECASE)
+                                if location_match:
+                                    location = location_match.group(1).strip()
+                
                     user_id = str(interaction.user.id)
                     channel_id = interaction.channel.id
                     
@@ -240,6 +271,8 @@ async def on_interaction(interaction):
                         'min_price': min_price,
                         'max_price': max_price,
                         'delivery': delivery,
+                        'condition': condition,
+                        'location': location,
                         'channel_id': channel_id,
                         'sort_by': 'newest'  # Domyślnie sortujemy po najnowszych
                     }
@@ -249,32 +282,60 @@ async def on_interaction(interaction):
                     
                     user_configs[user_id].append(config)
                     
-                    # Przygotowanie informacji o opcjach wysyłki
+                    # Przygotowanie informacji do wyświetlenia
                     delivery_info = ""
                     if delivery:
                         if delivery == "olx":
-                            delivery_info = "Tylko z wysyłką OLX"
+                            delivery_info = "📦 **Wysyłka**: Z wysyłką OLX"
                         elif delivery == "free":
-                            delivery_info = "Tylko z darmową wysyłką"
+                            delivery_info = "📦 **Wysyłka**: Tylko darmowa wysyłka"
                     
-                    # Tworzenie przycisku do usunięcia monitorowania
+                    condition_info = f"🏷️ **Stan**: {condition.capitalize()}" if condition else ""
+                    location_info = f"📍 **Lokalizacja**: {location}" if location else ""
+                    
+                    # Tworzenie przycisków akcji
                     view = discord.ui.View()
-                    button = discord.ui.Button(
+                    
+                    # Przycisk do usunięcia monitorowania
+                    delete_button = discord.ui.Button(
                         label="Usuń monitorowanie", 
                         style=discord.ButtonStyle.danger, 
-                        custom_id=f"remove_monitor_{len(user_configs[user_id])-1}_{user_id}"
+                        custom_id=f"remove_monitor_{len(user_configs[user_id])-1}_{user_id}",
+                        emoji="🗑️"
                     )
-                    view.add_item(button)
+                    view.add_item(delete_button)
                     
-                    await interaction.response.send_message(
-                        f"✅ Dodano monitorowanie dla: **{query}**\n"
-                        f"Kategoria: {category or 'wszystkie'}\n"
-                        f"Zakres cen: {min_price or 'od min'} - {max_price or 'do max'} zł\n"
-                        f"{delivery_info}\n"
-                        f"Sortowanie: Według najnowszych\n"
-                        f"Powiadomienia będą wysyłane do tego kanału co {INTERVAL} minut.",
-                        view=view
+                    # Tworzenie eleganckiego embeda z informacjami
+                    embed = discord.Embed(
+                        title=f"🔍 Nowe monitorowanie: {query}",
+                        description=f"Bot będzie sprawdzał nowe oferty co {INTERVAL} minut i wysyłał je na ten kanał.",
+                        color=discord.Color.green()
                     )
+                    
+                    embed.add_field(
+                        name="📋 Podstawowe informacje",
+                        value=f"**Kategoria**: {category or 'Wszystkie kategorie'}\n"
+                              f"**Zakres cen**: {min_price or 'Min'} - {max_price or 'Max'} zł\n"
+                              f"**Sortowanie**: Według najnowszych",
+                        inline=False
+                    )
+                    
+                    # Dodanie pola z dodatkowymi filtrami tylko jeśli są jakieś ustawione
+                    filters = []
+                    if delivery_info: filters.append(delivery_info)
+                    if condition_info: filters.append(condition_info)
+                    if location_info: filters.append(location_info)
+                    
+                    if filters:
+                        embed.add_field(
+                            name="🔎 Dodatkowe filtry",
+                            value="\n".join(filters),
+                            inline=False
+                        )
+                    
+                    embed.set_footer(text=f"Monitorowanie utworzone przez {interaction.user.name}", icon_url=interaction.user.display_avatar.url)
+                    
+                    await interaction.response.send_message(embed=embed, view=view)
             
             # Wysyłamy modal do użytkownika
             await interaction.response.send_modal(MonitorModal())
@@ -284,34 +345,101 @@ async def on_interaction(interaction):
             user_id = str(interaction.user.id)
             
             if user_id not in user_configs or not user_configs[user_id]:
-                await interaction.response.send_message("❌ Nie masz żadnych monitorowanych wyszukiwań.", ephemeral=True)
+                no_monitors_embed = discord.Embed(
+                    title="📋 Twoje monitorowania",
+                    description="Nie masz jeszcze żadnych aktywnych monitorowań.",
+                    color=discord.Color.light_grey()
+                )
+                no_monitors_embed.add_field(
+                    name="✨ Rozpocznij teraz!",
+                    value="Kliknij przycisk poniżej, aby dodać swoje pierwsze monitorowanie.",
+                    inline=False
+                )
+                
+                view = discord.ui.View()
+                add_button = discord.ui.Button(
+                    label="Dodaj monitorowanie", 
+                    style=discord.ButtonStyle.success, 
+                    custom_id="add_monitor_button",
+                    emoji="➕"
+                )
+                view.add_item(add_button)
+                
+                await interaction.response.send_message(embed=no_monitors_embed, view=view, ephemeral=True)
                 return
             
             embed = discord.Embed(
-                title="📋 Twoje monitorowane wyszukiwania",
-                color=discord.Color.blue()
+                title="📋 Twoje aktywne monitorowania",
+                description=f"Masz {len(user_configs[user_id])} aktywnych monitorowań. Kliknij przycisk przy monitorowaniu, aby je usunąć.",
+                color=discord.Color.from_rgb(5, 96, 252)  # Kolor OLX
             )
             
+            # Tworzenie przycisków do zarządzania listą
+            view = discord.ui.View()
+            
+            # Dla każdego monitorowania dodajemy pole w embedzie i przycisk do usunięcia
             for i, config in enumerate(user_configs[user_id], 1):
-                # Przygotowanie informacji o opcjach wysyłki
-                delivery_info = ""
+                # Przygotowanie szczegółowych informacji
+                details = []
+                
+                if config.get('category'):
+                    details.append(f"📁 **Kategoria**: {config['category']}")
+                
+                # Zakres cen
+                price_range = f"💰 **Cena**: "
+                if config.get('min_price') and config.get('max_price'):
+                    price_range += f"{config['min_price']} - {config['max_price']} zł"
+                elif config.get('min_price'):
+                    price_range += f"Od {config['min_price']} zł"
+                elif config.get('max_price'):
+                    price_range += f"Do {config['max_price']} zł"
+                else:
+                    price_range += "Dowolna"
+                details.append(price_range)
+                
+                # Informacja o wysyłce
                 if config.get('delivery'):
                     if config['delivery'] == "olx":
-                        delivery_info = "Tylko z wysyłką OLX"
+                        details.append("📦 **Wysyłka**: Z wysyłką OLX")
                     elif config['delivery'] == "free":
-                        delivery_info = "Tylko z darmową wysyłką"
+                        details.append("📦 **Wysyłka**: Darmowa wysyłka")
                 
-                value = f"Kategoria: {config['category'] or 'wszystkie'}\n" \
-                        f"Cena: {config['min_price'] or 'min'} - {config['max_price'] or 'max'} zł\n" \
-                        f"{delivery_info}\n" \
-                        f"Sortowanie: Według najnowszych"
+                # Stan przedmiotu
+                if config.get('condition'):
+                    details.append(f"🏷️ **Stan**: {config['condition'].capitalize()}")
+                
+                # Lokalizacja
+                if config.get('location'):
+                    details.append(f"📍 **Lokalizacja**: {config['location']}")
+                
+                value = "\n".join(details)
+                
                 embed.add_field(
                     name=f"{i}. {config['query']}",
-                    value=value,
+                    value=value or "Brak dodatkowych filtrów",
                     inline=False
                 )
+                
+                # Dodajemy przycisk do usunięcia dla każdego monitorowania
+                delete_button = discord.ui.Button(
+                    label=f"Usuń #{i}: {config['query'][:20]}{'...' if len(config['query']) > 20 else ''}", 
+                    style=discord.ButtonStyle.danger, 
+                    custom_id=f"remove_monitor_{i-1}_{user_id}",
+                    row=i  # Ustawiamy przycisk w nowym wierszu
+                )
+                view.add_item(delete_button)
             
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            # Dodajemy przycisk do dodawania nowego monitorowania
+            add_button = discord.ui.Button(
+                label="Dodaj nowe monitorowanie", 
+                style=discord.ButtonStyle.success, 
+                custom_id="add_monitor_button",
+                emoji="➕",
+                row=0  # Zawsze na górze
+            )
+            view.add_item(add_button)
+            
+            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 @bot.command(name='monitor')
 async def monitor(ctx, *, params):
@@ -439,56 +567,76 @@ async def remove_monitor(ctx, index: int):
 async def help_command(ctx):
     """Wyświetla dostępne komendy"""
     embed = discord.Embed(
-        title="📚 Pomoc - OLX Monitor Bot",
-        description="Lista dostępnych komend:",
-        color=discord.Color.green()
+        title="📱 OLX Monitor Bot - Pomoc",
+        description="**Śledź najnowsze oferty OLX automatycznie!**\n\n"
+                    "Bot pozwala na automatyczne monitorowanie nowych ofert na OLX "
+                    "według zadanych kryteriów. Skonfiguruj własne wyszukiwania i otrzymuj "
+                    "powiadomienia o nowych ofertach bezpośrednio na Discord!",
+        color=discord.Color.from_rgb(5, 96, 252)  # Kolor OLX
     )
     
+    embed.set_thumbnail(url="https://upload.wikimedia.org/wikipedia/commons/9/91/Logotyp_OLX_.png")
+    
     embed.add_field(
-        name=f"{PREFIX}monitor <fraza> | [kategoria] | [min_cena] | [max_cena] | [opcje_wysyłki] | [stan] | [lokalizacja]",
-        value="Dodaje nowe monitorowanie OLX\n"
-              "Przykład: `!monitor iPhone 13 | elektronika | 2000 | 3500 | olx | nowy | Warszawa`\n"
-              "Opcje wysyłki: `olx` (tylko z wysyłką OLX), `free` (darmowa wysyłka)\n"
-              "Stan: `nowy`, `używany`, `uszkodzony`\n"
-              "Sortowane wg. najnowszych ofert",
+        name="🚀 Szybki start",
+        value="Kliknij przycisk **Dodaj nowe monitorowanie** poniżej, aby utworzyć pierwsze monitorowanie "
+              "poprzez przyjazny formularz.",
         inline=False
     )
     
     embed.add_field(
-        name=f"{PREFIX}lista",
-        value="Wyświetla listę twoich monitorowanych wyszukiwań",
+        name="💬 Dostępne komendy",
+        value=f"`{PREFIX}lista` - Wyświetla listę twoich aktywnych monitorowań\n"
+              f"`{PREFIX}usun <numer>` - Usuwa monitorowanie o podanym numerze\n"
+              f"`{PREFIX}pomoc` - Wyświetla ten ekran pomocy",
         inline=False
     )
     
     embed.add_field(
-        name=f"{PREFIX}usun <numer>",
-        value="Usuwa monitorowane wyszukiwanie o podanym numerze z listy\n"
-              "Przykład: `!usun 1`",
+        name="📋 Dla zaawansowanych",
+        value=f"Możesz też dodać monitorowanie za pomocą komendy tekstowej:\n"
+              f"`{PREFIX}monitor <fraza> | [kategoria] | [min_cena] | [max_cena] | [opcje_wysyłki] | [stan] | [lokalizacja]`\n\n"
+              f"**Przykład:** `{PREFIX}monitor iPhone 13 | elektronika | 2000 | 3500 | olx | nowy | Warszawa`",
         inline=False
     )
     
     embed.add_field(
-        name=f"{PREFIX}pomoc",
-        value="Wyświetla tę wiadomość",
-        inline=False
+        name="📦 Opcje wysyłki",
+        value="Wybierz jedną z opcji:\n"
+              "• `olx` - Tylko oferty z wysyłką OLX\n"
+              "• `free` - Tylko oferty z darmową wysyłką",
+        inline=True
     )
     
-    # Dodanie przycisków do interakcji
+    embed.add_field(
+        name="🏷️ Stan przedmiotu",
+        value="Możliwe wartości:\n"
+              "• `nowy`\n"
+              "• `używany`\n"
+              "• `uszkodzony`",
+        inline=True
+    )
+    
+    embed.set_footer(text=f"Oferty są zawsze sortowane według najnowszych • Sprawdzanie co {INTERVAL} minut")
+    
+    # Dodanie przycisków do interakcji w bardziej atrakcyjnym stylu
     view = discord.ui.View()
     
     # Przycisk do dodania nowego monitorowania
     button_add = discord.ui.Button(
         label="Dodaj nowe monitorowanie", 
-        style=discord.ButtonStyle.primary, 
-        custom_id="add_monitor_button"
+        style=discord.ButtonStyle.success, 
+        custom_id="add_monitor_button",
+        emoji="➕"
     )
     view.add_item(button_add)
     
     # Przycisk do wyświetlenia listy
     button_list = discord.ui.Button(
-        label="Pokaż listę monitorowań", 
-        style=discord.ButtonStyle.secondary, 
-        custom_id="list_monitors_button"
+        label="Pokaż moje monitorowania", 
+        style=discord.ButtonStyle.primary, 
+        custom_id="list_monitors_button",
+        emoji="📋"
     )
     view.add_item(button_list)
     
@@ -525,10 +673,11 @@ async def check_offers():
                         new_offers.append(offer)
                 
                 for offer in new_offers:
+                    # Tworzenie bardziej atrakcyjnego embeda dla oferty
                     embed = discord.Embed(
                         title=offer['title'],
                         url=offer['url'],
-                        color=discord.Color.blue(),
+                        color=discord.Color.from_rgb(5, 96, 252),  # Kolor OLX
                         description=f"💰 **Cena:** {offer['price']}"
                     )
                     
@@ -536,21 +685,50 @@ async def check_offers():
                         embed.set_thumbnail(url=offer['img_url'])
                     
                     # Dodanie informacji o dostawie i lokalizacji
-                    if 'delivery' in offer:
-                        embed.add_field(name="📦 Dostawa", value=offer['delivery'], inline=True)
+                    info_fields = []
                     
-                    if 'location' in offer:
-                        embed.add_field(name="📍 Lokalizacja", value=offer['location'], inline=True)
+                    if 'delivery' in offer and offer['delivery'] != "Brak informacji":
+                        info_fields.append(f"📦 **Dostawa:** {offer['delivery']}")
                     
-                    embed.set_footer(text=f"Wyszukiwanie: {config['query']}")
+                    if 'location' in offer and offer['location'] != "Brak lokalizacji":
+                        info_fields.append(f"📍 **Lokalizacja:** {offer['location']}")
                     
-                    # Tworzenie przycisków
+                    if info_fields:
+                        embed.add_field(
+                            name="Szczegóły oferty",
+                            value="\n".join(info_fields),
+                            inline=False
+                        )
+                    
+                    # Dodanie informacji o wyszukiwaniu
+                    search_details = [f"🔍 Wyszukiwanie: **{config['query']}**"]
+                    
+                    if config.get('category'):
+                        search_details.append(f"📁 Kategoria: {config['category']}")
+                        
+                    if config.get('min_price') or config.get('max_price'):
+                        price_range = "💲 Zakres cen: "
+                        if config.get('min_price') and config.get('max_price'):
+                            price_range += f"{config['min_price']} - {config['max_price']} zł"
+                        elif config.get('min_price'):
+                            price_range += f"od {config['min_price']} zł"
+                        elif config.get('max_price'):
+                            price_range += f"do {config['max_price']} zł"
+                        search_details.append(price_range)
+                    
+                    embed.set_footer(text=" • ".join(search_details))
+                    
+                    # Dodanie daty znalezienia
+                    embed.timestamp = datetime.now()
+                    
+                    # Tworzenie przycisków z ikonami
                     view = discord.ui.View()
                     view.add_item(discord.ui.Button(
-                        label="Zobacz ofertę", 
+                        label="Zobacz szczegóły", 
                         style=discord.ButtonStyle.link, 
-                        url=offer['url']
-                    ))
+                        url=offer['url'],
+                        emoji="🔍"
+                    
                     
                     await channel.send(embed=embed, view=view)
             except Exception as e:
